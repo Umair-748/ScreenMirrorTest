@@ -19,13 +19,6 @@
     #waiting { text-align: center; padding: 2rem; }
     #waiting h1 { font-size: 2.5rem; margin-bottom: 1rem; color: #58a6ff; }
     #waiting p { color: #8b949e; font-size: 1.25rem; }
-    #code {
-      font-size: 4rem;
-      font-weight: 700;
-      letter-spacing: 0.5rem;
-      margin: 1.5rem 0;
-      color: #58a6ff;
-    }
     #video-container {
       display: none;
       width: 100vw;
@@ -56,9 +49,8 @@
 <body>
   <div id="waiting">
     <h1>TV Cast Mirror</h1>
-    <p>Enter this code on your iPhone</p>
-    <div id="code">------</div>
-    <p id="status">Waiting for iPhone…</p>
+    <p>Ready to mirror your iPhone screen</p>
+    <p id="status">Open the app and connect to this TV…</p>
   </div>
   <div id="video-container">
     <video id="remote-video" autoplay playsinline muted></video>
@@ -74,7 +66,7 @@
     let signalingPort = null;
     let peerConnection = null;
     let icePollTimer = null;
-    let pairingCode = generatePairingCode();
+    let sessionRequestTimer = null;
     let webRtcStartInProgress = false;
     let webRtcStarted = false;
     let blackScreenWatchdog = null;
@@ -82,8 +74,6 @@
     const context = cast.framework.CastReceiverContext.getInstance();
     const remoteVideo = document.getElementById('remote-video');
     const videoStatus = document.getElementById('video-status');
-
-    document.getElementById('code').textContent = pairingCode;
 
     function resetWebRtc({ keepSession = true } = {}) {
       if (icePollTimer) {
@@ -106,6 +96,8 @@
       videoStatus.textContent = '';
       if (keepSession && sessionId) {
         setStatus('Waiting for iPhone screen broadcast…');
+      } else if (!sessionId) {
+        setStatus('Open the app and connect to this TV…');
       }
     }
 
@@ -165,6 +157,7 @@
       signalingPort = data.signalingPort;
       setStatus('iPhone ready — start screen broadcast on iPhone');
       console.log('session_prepare applied', sessionId, signalingHost, signalingPort);
+      stopSessionPrepareRequests();
 
       void startWebRtc();
       return true;
@@ -208,12 +201,27 @@
       return res.json();
     }
 
-    function generatePairingCode() {
-      return String(Math.floor(100000 + Math.random() * 900000));
-    }
-
     function sendCastMessage(payload) {
       context.sendCustomMessage(CUSTOM_CHANNEL, payload);
+    }
+
+    function requestSessionPrepare() {
+      sendCastMessage({ type: 'request_session_prepare' });
+    }
+
+    function startSessionPrepareRequests() {
+      stopSessionPrepareRequests();
+      requestSessionPrepare();
+      sessionRequestTimer = setInterval(() => {
+        if (!sessionId) requestSessionPrepare();
+      }, 1500);
+    }
+
+    function stopSessionPrepareRequests() {
+      if (sessionRequestTimer) {
+        clearInterval(sessionRequestTimer);
+        sessionRequestTimer = null;
+      }
     }
 
     function showVideo() {
@@ -318,28 +326,14 @@
       }
     }
 
-    const pairingCodeDisplay = document.getElementById('code');
-
-    function refreshPairingCode() {
-      pairingCode = generatePairingCode();
-      pairingCodeDisplay.textContent = pairingCode;
-    }
-
-    function sendPairingCode() {
-      sendCastMessage({ type: 'pairing_code', code: pairingCode });
-    }
-
     context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => {
-      sendPairingCode();
-      setStatus('Code sent to iPhone — tap Connect to TV');
+      setStatus('Waiting for iPhone connection…');
+      startSessionPrepareRequests();
     });
 
     if (context.getSenders().length > 0) {
-      sendPairingCode();
+      startSessionPrepareRequests();
     }
-
-    // Retry in case the iPhone registers its Cast channel after the first send.
-    setInterval(sendPairingCode, 2000);
 
     context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
       if (peerConnection && remoteVideo.videoWidth > 0) {
@@ -347,12 +341,12 @@
         videoStatus.textContent = 'Live (iPhone backgrounded)';
         return;
       }
+      stopSessionPrepareRequests();
       resetWebRtc({ keepSession: false });
       sessionId = null;
       signalingHost = null;
       signalingPort = null;
-      refreshPairingCode();
-      setStatus('Waiting for iPhone…');
+      setStatus('Open the app and connect to this TV…');
     });
 
     context.start({
