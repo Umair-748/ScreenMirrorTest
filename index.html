@@ -116,8 +116,23 @@
 
     function showMediaCast(data) {
       if (!data || !data.mediaURL) return;
-      resetWebRtc({ keepSession: false });
-      hideMediaViewer();
+
+      if (icePollTimer) {
+        clearInterval(icePollTimer);
+        icePollTimer = null;
+      }
+      if (blackScreenWatchdog) {
+        clearTimeout(blackScreenWatchdog);
+        blackScreenWatchdog = null;
+      }
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      webRtcStarted = false;
+      webRtcStartInProgress = false;
+      remoteVideo.srcObject = null;
+
       document.getElementById('waiting').style.display = 'none';
       document.getElementById('video-container').style.display = 'none';
       mediaContainer.style.display = 'flex';
@@ -125,12 +140,17 @@
       const title = data.title || 'Media';
       const mediaURL = `${data.mediaURL}${data.mediaURL.includes('?') ? '&' : '?'}t=${Date.now()}`;
       if (data.mediaKind === 'video' || (data.contentType || '').startsWith('video/')) {
+        remoteImage.style.display = 'none';
+        remoteImage.removeAttribute('src');
         remoteMediaVideo.src = mediaURL;
         remoteMediaVideo.style.display = 'block';
         remoteMediaVideo.onerror = () => setStatus(`Failed to play ${title}`);
         remoteMediaVideo.play().catch(() => setStatus(`Failed to play ${title}`));
         setStatus(`Playing ${title}`);
       } else {
+        remoteMediaVideo.pause();
+        remoteMediaVideo.removeAttribute('src');
+        remoteMediaVideo.style.display = 'none';
         remoteImage.src = mediaURL;
         remoteImage.style.display = 'block';
         remoteImage.onerror = () => setStatus(`Failed to show ${title}`);
