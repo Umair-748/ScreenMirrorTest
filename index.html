@@ -123,14 +123,17 @@
       mediaContainer.style.display = 'flex';
 
       const title = data.title || 'Media';
+      const mediaURL = `${data.mediaURL}${data.mediaURL.includes('?') ? '&' : '?'}t=${Date.now()}`;
       if (data.mediaKind === 'video' || (data.contentType || '').startsWith('video/')) {
-        remoteMediaVideo.src = data.mediaURL;
+        remoteMediaVideo.src = mediaURL;
         remoteMediaVideo.style.display = 'block';
-        remoteMediaVideo.play().catch(console.error);
+        remoteMediaVideo.onerror = () => setStatus(`Failed to play ${title}`);
+        remoteMediaVideo.play().catch(() => setStatus(`Failed to play ${title}`));
         setStatus(`Playing ${title}`);
       } else {
-        remoteImage.src = data.mediaURL;
+        remoteImage.src = mediaURL;
         remoteImage.style.display = 'block';
+        remoteImage.onerror = () => setStatus(`Failed to show ${title}`);
         setStatus(`Showing ${title}`);
       }
     }
@@ -415,6 +418,7 @@
     context.start({
       disableIdleTimeout: true,
       customNamespaces: { [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON },
+      supportedCommands: cast.framework.messages.Command.ALL_BASIC_MEDIA,
     });
   </script>
 </body>
