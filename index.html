@@ -38,29 +38,6 @@
       z-index: 2;
       pointer-events: none;
     }
-    #media-container {
-      display: none;
-      width: 100vw;
-      height: 100vh;
-      background: #000;
-      position: fixed;
-      inset: 0;
-      align-items: center;
-      justify-content: center;
-    }
-    #remote-image {
-      display: none;
-      max-width: 100vw;
-      max-height: 100vh;
-      object-fit: contain;
-    }
-    #remote-media-video {
-      display: none;
-      width: 100vw;
-      height: 100vh;
-      object-fit: contain;
-      background: #000;
-    }
     #remote-video {
       width: 100%;
       height: 100%;
@@ -78,10 +55,6 @@
   <div id="video-container">
     <video id="remote-video" autoplay playsinline muted></video>
     <p id="video-status"></p>
-  </div>
-  <div id="media-container">
-    <img id="remote-image" alt="Cast media" />
-    <video id="remote-media-video" controls autoplay playsinline></video>
   </div>
 
   <script>
@@ -101,62 +74,6 @@
     const context = cast.framework.CastReceiverContext.getInstance();
     const remoteVideo = document.getElementById('remote-video');
     const videoStatus = document.getElementById('video-status');
-    const mediaContainer = document.getElementById('media-container');
-    const remoteImage = document.getElementById('remote-image');
-    const remoteMediaVideo = document.getElementById('remote-media-video');
-
-    function hideMediaViewer() {
-      mediaContainer.style.display = 'none';
-      remoteImage.style.display = 'none';
-      remoteMediaVideo.style.display = 'none';
-      remoteImage.removeAttribute('src');
-      remoteMediaVideo.pause();
-      remoteMediaVideo.removeAttribute('src');
-    }
-
-    function showMediaCast(data) {
-      if (!data || !data.mediaURL) return;
-
-      if (icePollTimer) {
-        clearInterval(icePollTimer);
-        icePollTimer = null;
-      }
-      if (blackScreenWatchdog) {
-        clearTimeout(blackScreenWatchdog);
-        blackScreenWatchdog = null;
-      }
-      if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
-      }
-      webRtcStarted = false;
-      webRtcStartInProgress = false;
-      remoteVideo.srcObject = null;
-
-      document.getElementById('waiting').style.display = 'none';
-      document.getElementById('video-container').style.display = 'none';
-      mediaContainer.style.display = 'flex';
-
-      const title = data.title || 'Media';
-      const mediaURL = `${data.mediaURL}${data.mediaURL.includes('?') ? '&' : '?'}t=${Date.now()}`;
-      if (data.mediaKind === 'video' || (data.contentType || '').startsWith('video/')) {
-        remoteImage.style.display = 'none';
-        remoteImage.removeAttribute('src');
-        remoteMediaVideo.src = mediaURL;
-        remoteMediaVideo.style.display = 'block';
-        remoteMediaVideo.onerror = () => setStatus(`Failed to play ${title}`);
-        remoteMediaVideo.play().catch(() => setStatus(`Failed to play ${title}`));
-        setStatus(`Playing ${title}`);
-      } else {
-        remoteMediaVideo.pause();
-        remoteMediaVideo.removeAttribute('src');
-        remoteMediaVideo.style.display = 'none';
-        remoteImage.src = mediaURL;
-        remoteImage.style.display = 'block';
-        remoteImage.onerror = () => setStatus(`Failed to show ${title}`);
-        setStatus(`Showing ${title}`);
-      }
-    }
 
     function resetWebRtc({ keepSession = true } = {}) {
       if (icePollTimer) {
@@ -174,7 +91,6 @@
       webRtcStarted = false;
       webRtcStartInProgress = false;
       remoteVideo.srcObject = null;
-      hideMediaViewer();
       document.getElementById('waiting').style.display = 'block';
       document.getElementById('video-container').style.display = 'none';
       videoStatus.textContent = '';
@@ -252,8 +168,6 @@
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (data.type === 'session_prepare') {
           applySessionPrepare(data);
-        } else if (data.type === 'media_cast') {
-          showMediaCast(data);
         }
       } catch (e) {
         console.error('Invalid cast message', e);
@@ -438,7 +352,6 @@
     context.start({
       disableIdleTimeout: true,
       customNamespaces: { [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON },
-      supportedCommands: cast.framework.messages.Command.ALL_BASIC_MEDIA,
     });
   </script>
 </body>
