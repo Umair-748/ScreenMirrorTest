@@ -114,6 +114,8 @@
     let webRtcStartInProgress = false;
     let webRtcStarted = false;
     let blackScreenWatchdog = null;
+    let mirrorStopRequested = false;
+    let webRtcGeneration = 0;
 
     const context = cast.framework.CastReceiverContext.getInstance();
     const remoteVideo = document.getElementById('remote-video');
@@ -208,7 +210,28 @@
       console.log('load_web_url', url, title);
     }
 
-    function resetWebRtc({ keepSession = true } = {}) {
+    function clearVideoElement() {
+      try { remoteVideo.pause(); } catch (e) {}
+      remoteVideo.srcObject = null;
+      remoteVideo.removeAttribute('src');
+      try { remoteVideo.load(); } catch (e) {}
+      videoStatus.textContent = '';
+    }
+
+    function stopMirrorSurface() {
+      mirrorStopRequested = true;
+      resetWebRtc({ keepSession: true, clearFrame: true });
+      showWaiting();
+      if (sessionId) {
+        setStatus('Ready — start screen broadcast on iPhone');
+      } else {
+        setStatus('Open the app and connect to this TV…');
+      }
+      console.log('mirror_stop applied');
+    }
+
+    function resetWebRtc({ keepSession = true, clearFrame = true } = {}) {
+      webRtcGeneration += 1;
       if (icePollTimer) {
         clearInterval(icePollTimer);
         icePollTimer = null;
@@ -218,27 +241,28 @@
         blackScreenWatchdog = null;
       }
       if (peerConnection) {
-        peerConnection.close();
+        try { peerConnection.close(); } catch (e) {}
         peerConnection = null;
       }
       webRtcStarted = false;
       webRtcStartInProgress = false;
-      remoteVideo.srcObject = null;
+      if (clearFrame) {
+        clearVideoElement();
+      } else {
+        remoteVideo.srcObject = null;
+        videoStatus.textContent = '';
+      }
       document.getElementById('video-container').style.display = 'none';
-      videoStatus.textContent = '';
       if (!webPageActive) {
         document.getElementById('waiting').style.display = 'block';
         if (keepSession && sessionId) {
-          setStatus('Waiting for iPhone screen broadcast…');
+          setStatus(mirrorStopRequested
+            ? 'Ready — start screen broadcast on iPhone'
+            : 'Waiting for iPhone screen broadcast…');
         } else if (!sessionId) {
           setStatus('Open the app and connect to this TV…');
         }
       }
-    }
-
-    function shouldRestartWebRtc() {
-      if (!peerConnection) return true;
-      return ['failed', 'closed', 'disconnected'].includes(peerConnection.connectionState);
     }
 
     function attachVideoStream(stream) {
@@ -277,15 +301,22 @@
         sessionId === data.sessionId &&
         signalingHost === data.signalingHost &&
         signalingPort === data.signalingPort;
+
+      // Always allow a fresh WebRTC start after stop / reconnect.
+      mirrorStopRequested = false;
+
       if (sameSession) {
-        if (shouldRestartWebRtc()) {
-          resetWebRtc();
-          void startWebRtc();
-        }
+        resetWebRtc({ keepSession: true, clearFrame: true });
+        sessionId = data.sessionId;
+        signalingHost = data.signalingHost;
+        signalingPort = data.signalingPort;
+        setStatus('iPhone ready — start screen broadcast on iPhone');
+        stopSessionPrepareRequests();
+        void startWebRtc();
         return true;
       }
 
-      resetWebRtc({ keepSession: false });
+      resetWebRtc({ keepSession: false, clearFrame: true });
 
       sessionId = data.sessionId;
       signalingHost = data.signalingHost;
@@ -312,6 +343,8 @@
           loadWebPage(data.mediaURL, data.title);
         } else if (data.type === 'clear_web_url') {
           clearWebPage();
+        } else if (data.type === 'mirror_stop') {
+          stopMirrorSurface();
         }
       } catch (e) {
         console.error('Invalid cast message', e);
@@ -369,10 +402,12 @@
     }
 
     async function waitForOffer() {
-      for (let i = 0; i < 120; i++) {
+      // Poll quickly so mirroring appears almost immediately after broadcast starts.
+      for (let i = 0; i < 400; i++) {
+        if (mirrorStopRequested) throw new Error('Mirror stop requested');
         const msg = await getJson(`/sdp/offer?sessionId=${encodeURIComponent(sessionId)}`);
         if (msg && msg.type === 'offer' && msg.sdp) return msg.sdp;
-        await sleep(500);
+        await sleep(150);
       }
       throw new Error('Offer timeout');
     }
@@ -393,44 +428,58 @@
         } catch (e) {
           console.warn('ICE poll error', e);
         }
-      }, 300);
+      }, 100);
     }
 
     async function startWebRtc() {
       if (!sessionId || !signalingHost || !signalingPort) return;
       if (peerConnection || webRtcStartInProgress || webRtcStarted) return;
+      if (mirrorStopRequested) return;
 
+      const generation = webRtcGeneration;
       webRtcStartInProgress = true;
       setStatus('Waiting for iPhone screen broadcast…');
 
       try {
         const offerSdp = await waitForOffer();
+        if (mirrorStopRequested || generation !== webRtcGeneration) return;
 
         peerConnection = new RTCPeerConnection(STUN);
-        peerConnection.ontrack = (event) => { 
+        peerConnection.ontrack = (event) => {
+          if (generation !== webRtcGeneration) return;
           if (!event.streams || !event.streams[0]) return;
           attachVideoStream(event.streams[0]);
         };
 
         peerConnection.onconnectionstatechange = () => {
+          if (generation !== webRtcGeneration) return;
           const state = peerConnection?.connectionState;
           videoStatus.textContent = state ? `WebRTC: ${state}` : '';
           if (state === 'connected') {
             setStatus('Connected');
           }
-          if (state === 'failed' || state === 'disconnected') {
-            console.warn('WebRTC state', state, '— retrying');
-            resetWebRtc();
+          if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+            console.warn('WebRTC state', state);
+            // Intentional stop — clear the frozen frame and do not auto-retry.
+            if (mirrorStopRequested || state === 'closed') {
+              resetWebRtc({ keepSession: true, clearFrame: true });
+              showWaiting();
+              setStatus(sessionId
+                ? 'Ready — start screen broadcast on iPhone'
+                : 'Open the app and connect to this TV…');
+              return;
+            }
+            resetWebRtc({ keepSession: true, clearFrame: true });
             setTimeout(() => {
-              if (sessionId && !webRtcStarted && !webRtcStartInProgress) {
+              if (sessionId && !webRtcStarted && !webRtcStartInProgress && !mirrorStopRequested) {
                 void startWebRtc();
               }
-            }, 1500);
+            }, 800);
           }
         };
 
         peerConnection.onicecandidate = (event) => {
-          if (!event.candidate) return;
+          if (!event.candidate || generation !== webRtcGeneration) return;
           postJson('/ice', {
             sessionId,
             candidate: event.candidate.candidate,
@@ -440,8 +489,10 @@
         };
 
         await peerConnection.setRemoteDescription({ type: 'offer', sdp: offerSdp });
+        if (generation !== webRtcGeneration) return;
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
+        if (generation !== webRtcGeneration) return;
 
         await postJson('/sdp', {
           sessionId,
@@ -452,16 +503,21 @@
         startIcePolling();
         webRtcStarted = true;
       } catch (e) {
+        if (generation !== webRtcGeneration) return;
         console.error('startWebRtc failed', e);
-        resetWebRtc();
-        setStatus('Waiting for iPhone screen broadcast…');
-        setTimeout(() => {
-          if (sessionId && !webRtcStarted && !webRtcStartInProgress) {
-            void startWebRtc();
-          }
-        }, 2000);
+        resetWebRtc({ keepSession: true, clearFrame: true });
+        if (!mirrorStopRequested) {
+          setStatus('Waiting for iPhone screen broadcast…');
+          setTimeout(() => {
+            if (sessionId && !webRtcStarted && !webRtcStartInProgress && !mirrorStopRequested) {
+              void startWebRtc();
+            }
+          }, 1000);
+        }
       } finally {
-        webRtcStartInProgress = false;
+        if (generation === webRtcGeneration) {
+          webRtcStartInProgress = false;
+        }
       }
     }
 
