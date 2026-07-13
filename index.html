@@ -42,6 +42,13 @@
       border: 0;
       background: #000;
     }
+    #web-image {
+      display: none;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
     #web-status {
       position: fixed;
       left: 0;
@@ -90,6 +97,7 @@
       allowfullscreen
       referrerpolicy="strict-origin-when-cross-origin"
     ></iframe>
+    <img id="web-image" alt="Cast page snapshot" />
     <p id="web-status"></p>
   </div>
 
@@ -111,6 +119,7 @@
     const remoteVideo = document.getElementById('remote-video');
     const videoStatus = document.getElementById('video-status');
     const webFrame = document.getElementById('web-frame');
+    const webImage = document.getElementById('web-image');
     const webStatus = document.getElementById('web-status');
     let webPageActive = false;
 
@@ -133,9 +142,22 @@
       document.getElementById('web-container').style.display = 'block';
     }
 
+    function isImageURL(url) {
+      try {
+        const u = new URL(url);
+        if (u.pathname.indexOf('/media') !== -1) return true;
+        return /\.(jpe?g|png|gif|webp)$/i.test(u.pathname);
+      } catch (e) {
+        return false;
+      }
+    }
+
     function clearWebPage() {
       webPageActive = false;
       webFrame.removeAttribute('src');
+      webImage.removeAttribute('src');
+      webFrame.style.display = 'block';
+      webImage.style.display = 'none';
       webStatus.textContent = '';
       if (peerConnection && remoteVideo.srcObject) {
         showVideo();
@@ -151,20 +173,38 @@
 
     function loadWebPage(url, title) {
       if (!url || typeof url !== 'string') return;
-      // Pause mirror WebRTC so the iframe is the active TV surface.
+      // Pause mirror WebRTC so the web surface is active.
       stopSessionPrepareRequests();
       resetWebRtc({ keepSession: true });
       webPageActive = true;
       showWebPage();
       webStatus.textContent = title ? `Loading ${title}…` : 'Loading page…';
       setStatus(title ? `Showing ${title}` : 'Showing web page');
-      webFrame.onload = () => {
+
+      const showLoaded = () => {
         webStatus.textContent = title || '';
       };
-      webFrame.onerror = () => {
+      const showFailed = () => {
         webStatus.textContent = 'This page could not be displayed on TV';
+        setStatus('Page blocked embedding — try another site or YouTube video');
       };
-      webFrame.src = url;
+
+      if (isImageURL(url)) {
+        // Browser cast sends a JPEG snapshot (Google and many sites block iframes).
+        webFrame.style.display = 'none';
+        webFrame.removeAttribute('src');
+        webImage.style.display = 'block';
+        webImage.onload = showLoaded;
+        webImage.onerror = showFailed;
+        webImage.src = url;
+      } else {
+        webImage.style.display = 'none';
+        webImage.removeAttribute('src');
+        webFrame.style.display = 'block';
+        webFrame.onload = showLoaded;
+        webFrame.onerror = showFailed;
+        webFrame.src = url;
+      }
       console.log('load_web_url', url, title);
     }
 
@@ -262,8 +302,11 @@
       try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (data.type === 'session_prepare') {
-          // Screen mirroring takes over from any web page.
-          if (webPageActive) clearWebPage();
+          // Do not tear down an active web/YouTube cast for mirror prepare pings.
+          if (webPageActive) {
+            console.log('ignoring session_prepare during web cast');
+            return;
+          }
           applySessionPrepare(data);
         } else if (data.type === 'load_web_url') {
           loadWebPage(data.mediaURL, data.title);
@@ -364,7 +407,7 @@
         const offerSdp = await waitForOffer();
 
         peerConnection = new RTCPeerConnection(STUN);
-        peerConnection.ontrack = (event) => {
+        peerConnection.ontrack = (event) => { 
           if (!event.streams || !event.streams[0]) return;
           attachVideoStream(event.streams[0]);
         };
