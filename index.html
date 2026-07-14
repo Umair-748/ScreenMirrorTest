@@ -431,7 +431,7 @@
         if (mirrorStopRequested) throw new Error('Mirror stop requested');
         const msg = await getJson(`/sdp/offer?sessionId=${encodeURIComponent(sessionId)}`);
         if (msg && msg.type === 'offer' && msg.sdp) return msg.sdp;
-        await sleep(100);
+        await sleep(50);
       }
       throw new Error('Offer timeout');
     }
@@ -473,6 +473,9 @@
           if (generation !== webRtcGeneration) return;
           if (!event.streams || !event.streams[0]) return;
           attachVideoStream(event.streams[0]);
+          if (event.track && event.track.kind === 'audio') {
+            event.track.enabled = true;
+          }
         };
 
         peerConnection.onconnectionstatechange = () => {
