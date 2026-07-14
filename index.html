@@ -103,7 +103,8 @@
 
   <script>
     const CUSTOM_CHANNEL = 'urn:x-cast:com.tvmirror.signaling';
-    const STUN = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    // Same-LAN Chromecast ↔ iPhone: host candidates only (matches iOS sender).
+    const STUN = { iceServers: [] };
 
     let sessionId = null;
     let signalingHost = null;
@@ -291,7 +292,7 @@
           resetWebRtc();
           void startWebRtc();
         }
-      }, 10_000);
+      }, 4_000);
     }
 
     function applySessionPrepare(data) {
@@ -305,27 +306,34 @@
       // Always allow a fresh WebRTC start after stop / reconnect.
       mirrorStopRequested = false;
 
-      if (sameSession) {
+      sessionId = data.sessionId;
+      signalingHost = data.signalingHost;
+      signalingPort = data.signalingPort;
+      stopSessionPrepareRequests();
+
+      const shouldStart = data.startMirroring === true;
+
+      if (shouldStart) {
+        // Broadcast is starting — begin WebRTC only now so we never poll a dead :8766.
         resetWebRtc({ keepSession: true, clearFrame: true });
         sessionId = data.sessionId;
         signalingHost = data.signalingHost;
         signalingPort = data.signalingPort;
-        setStatus('iPhone ready — start screen broadcast on iPhone');
-        stopSessionPrepareRequests();
+        setStatus('Connecting mirror…');
+        console.log('session_prepare startMirroring', sessionId, signalingHost, signalingPort);
         void startWebRtc();
         return true;
       }
 
-      resetWebRtc({ keepSession: false, clearFrame: true });
-
-      sessionId = data.sessionId;
-      signalingHost = data.signalingHost;
-      signalingPort = data.signalingPort;
+      // Credentials only — wait for the user to start screen broadcast.
+      if (!sameSession) {
+        resetWebRtc({ keepSession: false, clearFrame: true });
+        sessionId = data.sessionId;
+        signalingHost = data.signalingHost;
+        signalingPort = data.signalingPort;
+      }
       setStatus('iPhone ready — start screen broadcast on iPhone');
-      console.log('session_prepare applied', sessionId, signalingHost, signalingPort);
-      stopSessionPrepareRequests();
-
-      void startWebRtc();
+      console.log('session_prepare credentials only', sessionId, signalingHost, signalingPort);
       return true;
     }
 
@@ -364,18 +372,34 @@
     }
 
     async function postJson(path, body, query = '') {
-      return fetch(signalingUrl(path + query), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      try {
+        return await fetch(signalingUrl(path + query), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
     async function getJson(path) {
-      const res = await fetch(signalingUrl(path));
-      if (res.status === 204) return null;
-      if (!res.ok) return null;
-      return res.json();
+      const controller = new AbortController();
+      // Short timeout: without a listener, Chromecast TCP connect can hang 10–20s+.
+      const timer = setTimeout(() => controller.abort(), 800);
+      try {
+        const res = await fetch(signalingUrl(path), { signal: controller.signal });
+        if (res.status === 204) return null;
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (e) {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
     function sendCastMessage(payload) {
@@ -407,7 +431,7 @@
         if (mirrorStopRequested) throw new Error('Mirror stop requested');
         const msg = await getJson(`/sdp/offer?sessionId=${encodeURIComponent(sessionId)}`);
         if (msg && msg.type === 'offer' && msg.sdp) return msg.sdp;
-        await sleep(150);
+        await sleep(100);
       }
       throw new Error('Offer timeout');
     }
@@ -512,7 +536,7 @@
             if (sessionId && !webRtcStarted && !webRtcStartInProgress && !mirrorStopRequested) {
               void startWebRtc();
             }
-          }, 1000);
+          }, 400);
         }
       } finally {
         if (generation === webRtcGeneration) {
