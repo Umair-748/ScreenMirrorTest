@@ -618,7 +618,7 @@
       if (peerConnection && remoteVideo.videoWidth > 0) {
         // Main app may background while ReplayKit keeps streaming.
         setStatus('iPhone in background — mirroring continues');
-        videoStatus.textContent = 'Live (iPhone backgrounded)';
+        
         return;
       }
       stopSessionPrepareRequests();
