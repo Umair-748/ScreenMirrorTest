@@ -317,16 +317,27 @@
       );
 
       if (blackScreenWatchdog) clearTimeout(blackScreenWatchdog);
+      let playRetry = setInterval(() => {
+        if (remoteVideo.videoWidth > 0) {
+          clearInterval(playRetry);
+          return;
+        }
+        remoteVideo.muted = true;
+        remoteVideo.play().catch(() => {});
+      }, 1500);
       blackScreenWatchdog = setTimeout(() => {
+        clearInterval(playRetry);
         if (!remoteVideo.videoWidth) {
           console.warn('No video frames yet', {
             readyState: remoteVideo.readyState,
             paused: remoteVideo.paused,
             tracks: stream.getTracks().map((t) => t.kind + ':' + t.readyState),
           });
-          videoStatus.textContent = 'No video frames — check same Wi‑Fi / try again';
+          // Soft tip only — keep trying; first broadcast can take longer for the first keyframe.
+          videoStatus.textContent = 'Waiting for first frame…';
+          setStatus('Connected — waiting for video…');
         }
-      }, 10_000);
+      }, 20_000);
     }
 
     function applySessionPrepare(data) {
