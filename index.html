@@ -268,48 +268,65 @@
 
     function attachVideoStream(stream) {
       remoteVideo.srcObject = stream;
-      // Chromecast autoplay often fails when unmuted — start muted, then unmute after play.
+      // Chromecast often skips decoding while the <video> is display:none.
+      // Show the surface immediately (same as reference receiver) so frames can decode.
+      showVideo();
       remoteVideo.muted = true;
       try { remoteVideo.setAttribute('playsinline', 'true'); } catch (_) {}
+      try { remoteVideo.autoplay = true; } catch (_) {}
 
-      const revealVideo = () => {
-        showVideo();
+      const markLive = () => {
         setStatus('Connected');
         videoStatus.textContent = 'Live';
+        remoteVideo.muted = false;
         if (blackScreenWatchdog) {
           clearTimeout(blackScreenWatchdog);
           blackScreenWatchdog = null;
         }
       };
 
-      remoteVideo.onplaying = () => {
-        remoteVideo.muted = false;
-        revealVideo();
-      };
+      remoteVideo.onplaying = markLive;
       remoteVideo.onloadeddata = () => {
-        if (remoteVideo.videoWidth > 0) revealVideo();
+        if (remoteVideo.videoWidth > 0) markLive();
+      };
+      remoteVideo.onresize = () => {
+        if (remoteVideo.videoWidth > 0) markLive();
       };
 
       const playPromise = remoteVideo.play();
       if (playPromise && typeof playPromise.then === 'function') {
         playPromise.then(() => {
-          remoteVideo.muted = false;
-          if (remoteVideo.videoWidth > 0) revealVideo();
+          if (remoteVideo.videoWidth > 0) {
+            markLive();
+          } else {
+            setStatus('Connected — decoding video…');
+            videoStatus.textContent = 'Receiving stream…';
+          }
         }).catch((e) => {
           console.warn('video.play failed, retrying muted', e);
           remoteVideo.muted = true;
           remoteVideo.play().catch(() => {});
         });
+      } else {
+        setStatus('Connected — decoding video…');
       }
 
-      // Do not reset WebRTC here — the iPhone extension offers only once per broadcast.
+      console.log(
+        'attachVideoStream tracks=',
+        stream.getTracks().map((t) => `${t.kind}:${t.readyState}:enabled=${t.enabled}:muted=${t.muted}`).join(',')
+      );
+
       if (blackScreenWatchdog) clearTimeout(blackScreenWatchdog);
       blackScreenWatchdog = setTimeout(() => {
         if (!remoteVideo.videoWidth) {
-          console.warn('Black screen — no decoded frames yet (not renegotiating)');
-          videoStatus.textContent = 'Waiting for video frames…';
+          console.warn('No video frames yet', {
+            readyState: remoteVideo.readyState,
+            paused: remoteVideo.paused,
+            tracks: stream.getTracks().map((t) => t.kind + ':' + t.readyState),
+          });
+          videoStatus.textContent = 'No video frames — check same Wi‑Fi / try again';
         }
-      }, 8_000);
+      }, 10_000);
     }
 
     function applySessionPrepare(data) {
@@ -494,7 +511,10 @@
         peerConnection = new RTCPeerConnection(STUN);
         peerConnection.ontrack = (event) => {
           if (generation !== webRtcGeneration) return;
-          if (event.track) event.track.enabled = true;
+          if (event.track) {
+            event.track.enabled = true;
+            console.log('ontrack', event.track.kind, event.track.id, 'streams=', event.streams?.length || 0);
+          }
           // Unified Plan sometimes delivers tracks with an empty streams array.
           const stream = (event.streams && event.streams[0])
             ? event.streams[0]
