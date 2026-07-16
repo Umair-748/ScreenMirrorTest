@@ -549,7 +549,18 @@
               setStatus('Connected — waiting for video…');
             }
           }
-          if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+          if (state === 'disconnected') {
+            // Transient — ICE frequently recovers on its own within a few seconds.
+            // Tearing down here would force startWebRtc() to fetch the sender's one-shot
+            // offer again and POST a second answer that the extension never reads,
+            // permanently blanking the TV. Keep the peer connection and wait it out.
+            console.warn('WebRTC disconnected — waiting for ICE recovery');
+            if (!mirrorStopRequested && remoteVideo.videoWidth === 0) {
+              setStatus('Reconnecting mirror…');
+            }
+            return;
+          }
+          if (state === 'failed' || state === 'closed') {
             console.warn('WebRTC state', state);
             // Intentional stop — clear the frozen frame and do not auto-retry.
             if (mirrorStopRequested || state === 'closed') {
