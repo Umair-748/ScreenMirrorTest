@@ -540,7 +540,7 @@
         peerConnection.onconnectionstatechange = () => {
           if (generation !== webRtcGeneration) return;
           const state = peerConnection?.connectionState;
-          videoStatus.textContent = state ? `WebRTC: ${state}` : '';
+          videoStatus.textContent = state ? `${state}` : '';
           if (state === 'connected') {
             // ICE "connected" ≠ picture yet — only claim Live when frames decode.
             if (remoteVideo.videoWidth > 0) {
