@@ -1,11 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
   <title>Screen Mirror</title>
-  <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
   <style>
     :root {
       --bg: #000D1D;
@@ -15,7 +16,6 @@
       --blue-soft: #9EC7F9;
       --text: #FFFFFF;
       --muted: #8FA6BF;
-      --error: #FF6B6B;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; }
@@ -30,8 +30,6 @@
       align-items: center;
       justify-content: center;
     }
-
-    /* Idle / status card */
     #waiting {
       max-width: 760px;
       padding: 3rem 2.75rem;
@@ -64,305 +62,477 @@
       color: var(--blue);
       margin-bottom: 0.7rem;
     }
-    #title { font-size: 3rem; font-weight: 700; margin-bottom: 0.7rem; }
-    #subtitle { color: var(--muted); font-size: 1.25rem; line-height: 1.45; margin-bottom: 1.4rem; }
-    #status { display: flex; align-items: center; gap: 0.9rem; color: var(--blue-soft); font-size: 1.15rem; min-height: 1.6rem; }
-    #status.error { color: var(--error); }
-    #spinner {
+    #waiting h1 { font-size: 3rem; font-weight: 700; margin-bottom: 0.7rem; }
+    #waiting .subtitle { color: var(--muted); font-size: 1.25rem; line-height: 1.45; margin-bottom: 1.4rem; }
+    #status { color: var(--blue-soft); font-size: 1.15rem; }
+    #video-container {
       display: none;
-      width: 22px;
-      height: 22px;
-      flex: none;
-      border: 3px solid rgba(158, 199, 249, 0.25);
-      border-top-color: var(--blue);
-      border-radius: 50%;
-      animation: spin 0.9s linear infinite;
-    }
-    #spinner.on { display: block; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* Live mirror */
-    #stage {
-      display: none;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
       position: fixed;
       inset: 0;
-      background: #000;
     }
-    #mirror {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      background: #000;
-    }
-    #live-badge {
+    video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+    #video-status {
       position: fixed;
       left: 50%;
       bottom: 1.8rem;
       transform: translateX(-50%);
-      padding: 0.45rem 1rem;
-      border-radius: 999px;
-      background: linear-gradient(90deg, var(--blue-dark), var(--blue));
       color: #fff;
       font-size: 0.85rem;
       font-weight: 700;
       letter-spacing: 0.16em;
       text-transform: uppercase;
+      z-index: 2;
       pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.4s ease;
-    }
-    #live-badge.show { opacity: 1; }
-    #overlay {
-      position: fixed;
-      left: 50%;
-      top: 1.6rem;
-      transform: translateX(-50%);
-      display: none;
-      align-items: center;
-      gap: 0.8rem;
-      padding: 0.6rem 1.2rem;
+      padding: 0.45rem 0.9rem;
       border-radius: 999px;
-      background: rgba(0, 13, 29, 0.78);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: var(--blue-soft);
-      font-size: 1rem;
-      pointer-events: none;
+      background: linear-gradient(90deg, var(--blue-dark), var(--blue));
+      min-width: 4.5rem;
+      text-align: center;
     }
-    #overlay.show { display: flex; }
+    #video-status:empty { display: none; }
   </style>
 </head>
 <body>
   <div id="waiting">
     <div class="brand-mark" aria-hidden="true"></div>
     <p class="eyebrow">Screen Mirror</p>
-    <h1 id="title">Ready on this TV</h1>
-    <p id="subtitle">Your iPhone screen will appear here.</p>
-    <div id="status"><span id="spinner"></span><span id="status-text">Open Screen Mirror on your iPhone and start mirroring.</span></div>
+    <h1>Ready on this TV</h1>
+    <p class="subtitle">Your iPhone screen will appear here.</p>
+    <p id="status">Open Screen Mirror on your iPhone and connect to this TV.</p>
   </div>
-
-  <div id="stage">
-    <img id="mirror" alt="Live mirror">
-    <div id="overlay"><span id="overlay-text"></span></div>
-    <div id="live-badge">Live</div>
+  <div id="video-container">
+    <video id="remote-video" autoplay playsinline muted></video>
+    <p id="video-status"></p>
   </div>
 
   <script>
-    const NAMESPACE = 'urn:x-cast:com.screenmirror.live';
-
+    const CUSTOM_CHANNEL = 'urn:x-cast:com.screenmirror.live';
+    // Same-LAN Chromecast <-> iPhone: host candidates only (matches the iOS sender).
+    const RTC_CONFIG = { iceServers: [] };
     const COPY = {
-      idle: 'Open Screen Mirror on your iPhone and start mirroring.',
-      connecting: 'Connecting to your iPhone…',
-      waitingFrame: 'Waiting for the first frame…',
-      reconnecting: 'Reconnecting to your iPhone…',
-      stopped: 'Mirroring stopped. Start again from your iPhone.',
-      failed: 'Could not load the phone stream. Check that both devices are on the same Wi-Fi.',
-      phoneAway: 'Your iPhone disconnected. Mirroring will resume if it comes back.',
+      idle: 'Open Screen Mirror on your iPhone and connect to this TV.',
+      waitingPhone: 'Waiting for Screen Mirror on your iPhone…',
+      waitingBroadcast: 'Waiting for screen broadcast from your iPhone…',
+      readyBroadcast: 'Connected. Tap Start Broadcast on your iPhone.',
+      connecting: 'Starting screen mirror…',
+      connected: 'Mirroring live',
+      decoding: 'Connected — preparing the picture…',
+      waitingFrame: 'Waiting for first frame…',
+      waitingVideo: 'Connected — waiting for video…',
+      reconnecting: 'Reconnecting…',
+      background: 'iPhone is in the background — mirroring continues',
+      receiving: 'Receiving stream…',
+      live: 'Live',
     };
 
-    const MAX_RETRIES = 20;
-    const RETRY_BASE_MS = 500;
-    const RETRY_MAX_MS = 3000;
-    const STALL_CHECK_MS = 4000;
+    let sessionId = null;
+    let signalingHost = null;
+    let signalingPort = null;
+    let peerConnection = null;
+    let icePollTimer = null;
+    let sessionRequestTimer = null;
+    let webRtcStartInProgress = false;
+    let webRtcStarted = false;
+    let blackScreenWatchdog = null;
+    let mirrorStopRequested = false;
+    let webRtcGeneration = 0;
 
     const context = cast.framework.CastReceiverContext.getInstance();
-    const waiting = document.getElementById('waiting');
-    const stage = document.getElementById('stage');
-    const mirror = document.getElementById('mirror');
-    const liveBadge = document.getElementById('live-badge');
-    const overlay = document.getElementById('overlay');
-    const overlayText = document.getElementById('overlay-text');
-    const statusText = document.getElementById('status-text');
-    const statusBox = document.getElementById('status');
-    const spinner = document.getElementById('spinner');
-    const title = document.getElementById('title');
-    const subtitle = document.getElementById('subtitle');
+    const remoteVideo = document.getElementById('remote-video');
+    const videoStatus = document.getElementById('video-status');
 
-    let streamURL = null;
-    let generation = 0;
-    let retries = 0;
-    let retryTimer = null;
-    let stallTimer = null;
-    let badgeTimer = null;
-    let gotFrame = false;
-    let stopRequested = true;
-
-    function setCard(titleText, subtitleText, text, { busy = false, error = false } = {}) {
-      title.textContent = titleText;
-      subtitle.textContent = subtitleText;
-      statusText.textContent = text;
-      statusBox.classList.toggle('error', error);
-      spinner.classList.toggle('on', busy);
+    function setStatus(text) {
+      document.getElementById('status').textContent = text;
     }
 
-    function showCard() {
-      stage.style.display = 'none';
-      waiting.style.display = 'block';
+    function showWaiting() {
+      document.getElementById('waiting').style.display = 'block';
+      document.getElementById('video-container').style.display = 'none';
     }
 
-    function showStage() {
-      waiting.style.display = 'none';
-      stage.style.display = 'block';
+    function showVideo() {
+      document.getElementById('waiting').style.display = 'none';
+      document.getElementById('video-container').style.display = 'block';
     }
 
-    function setOverlay(text) {
-      if (text) {
-        overlayText.textContent = text;
-        overlay.classList.add('show');
+    function clearVideoElement() {
+      try { remoteVideo.pause(); } catch (e) {}
+      remoteVideo.srcObject = null;
+      remoteVideo.removeAttribute('src');
+      try { remoteVideo.load(); } catch (e) {}
+      videoStatus.textContent = '';
+    }
+
+    function stopMirrorSurface() {
+      mirrorStopRequested = true;
+      resetWebRtc({ keepSession: true, clearFrame: true });
+      showWaiting();
+      setStatus(sessionId ? COPY.readyBroadcast : COPY.idle);
+    }
+
+    function resetWebRtc({ keepSession = true, clearFrame = true } = {}) {
+      webRtcGeneration += 1;
+      if (icePollTimer) {
+        clearInterval(icePollTimer);
+        icePollTimer = null;
+      }
+      if (blackScreenWatchdog) {
+        clearTimeout(blackScreenWatchdog);
+        blackScreenWatchdog = null;
+      }
+      if (peerConnection) {
+        try { peerConnection.close(); } catch (e) {}
+        peerConnection = null;
+      }
+      webRtcStarted = false;
+      webRtcStartInProgress = false;
+      if (clearFrame) {
+        clearVideoElement();
       } else {
-        overlay.classList.remove('show');
+        remoteVideo.srcObject = null;
+        videoStatus.textContent = '';
+      }
+      document.getElementById('video-container').style.display = 'none';
+      document.getElementById('waiting').style.display = 'block';
+      if (keepSession && sessionId) {
+        setStatus(mirrorStopRequested ? COPY.readyBroadcast : COPY.waitingBroadcast);
+      } else if (!sessionId) {
+        setStatus(COPY.idle);
       }
     }
 
-    function clearTimers() {
-      clearTimeout(retryTimer);
-      clearInterval(stallTimer);
-      clearTimeout(badgeTimer);
-      retryTimer = stallTimer = badgeTimer = null;
-    }
+    function attachVideoStream(stream) {
+      remoteVideo.srcObject = stream;
+      // Chromecast often skips decoding while the <video> is display:none.
+      showVideo();
+      remoteVideo.muted = true;
+      try { remoteVideo.setAttribute('playsinline', 'true'); } catch (_) {}
+      try { remoteVideo.autoplay = true; } catch (_) {}
 
-    function withCacheBust(url) {
-      return url + (url.indexOf('?') === -1 ? '?' : '&') + 't=' + Date.now();
-    }
-
-    function sendToPhone(payload) {
-      try { context.sendCustomMessage(NAMESPACE, undefined, payload); } catch (e) { /* sender may be gone */ }
-    }
-
-    function loadStream() {
-      const gen = generation;
-      mirror.onload = () => {
-        if (gen !== generation) return;
-        onFrame();
+      const markLive = () => {
+        setStatus(COPY.connected);
+        videoStatus.textContent = COPY.live;
+        remoteVideo.muted = false;
+        if (blackScreenWatchdog) {
+          clearTimeout(blackScreenWatchdog);
+          blackScreenWatchdog = null;
+        }
       };
-      mirror.onerror = () => {
-        if (gen !== generation) return;
-        scheduleRetry();
-      };
-      mirror.src = withCacheBust(streamURL);
-    }
 
-    function onFrame() {
-      retries = 0;
-      gotFrame = true;
-      setOverlay('');
-      showStage();
-      liveBadge.classList.add('show');
-      clearTimeout(badgeTimer);
-      badgeTimer = setTimeout(() => liveBadge.classList.remove('show'), 4000);
-      sendToPhone({ type: 'status', state: 'live' });
-    }
+      remoteVideo.onplaying = markLive;
+      remoteVideo.onloadeddata = () => { if (remoteVideo.videoWidth > 0) markLive(); };
+      remoteVideo.onresize = () => { if (remoteVideo.videoWidth > 0) markLive(); };
 
-    function scheduleRetry() {
-      if (stopRequested || !streamURL) return;
-      retries += 1;
-      if (retries > MAX_RETRIES) {
-        fail();
-        return;
-      }
-      if (gotFrame) {
-        setOverlay(COPY.reconnecting);
+      const playPromise = remoteVideo.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise.then(() => {
+          if (remoteVideo.videoWidth > 0) {
+            markLive();
+          } else {
+            setStatus(COPY.decoding);
+            videoStatus.textContent = COPY.receiving;
+          }
+        }).catch((e) => {
+          console.warn('video.play failed, retrying muted', e);
+          remoteVideo.muted = true;
+          remoteVideo.play().catch(() => {});
+        });
       } else {
-        setCard('Connecting', 'Hang on, your iPhone is getting ready.', COPY.waitingFrame, { busy: true });
+        setStatus(COPY.decoding);
       }
-      clearTimeout(retryTimer);
-      const delay = Math.min(RETRY_BASE_MS * retries, RETRY_MAX_MS);
-      retryTimer = setTimeout(() => {
-        if (!stopRequested) loadStream();
-      }, delay);
+
+      if (blackScreenWatchdog) clearTimeout(blackScreenWatchdog);
+      const playRetry = setInterval(() => {
+        if (remoteVideo.videoWidth > 0) {
+          clearInterval(playRetry);
+          return;
+        }
+        remoteVideo.muted = true;
+        remoteVideo.play().catch(() => {});
+      }, 1500);
+      blackScreenWatchdog = setTimeout(() => {
+        clearInterval(playRetry);
+        if (!remoteVideo.videoWidth) {
+          // Soft tip only — keep trying; the first keyframe can take a while.
+          videoStatus.textContent = COPY.waitingFrame;
+          setStatus(COPY.waitingVideo);
+        }
+      }, 20000);
     }
 
-    // Multipart MJPEG never fires `load` again, so detect a dead stream by
-    // watching the connection: if the browser reports the image as broken, retry.
-    function startStallWatch() {
-      clearInterval(stallTimer);
-      stallTimer = setInterval(() => {
-        if (stopRequested || !streamURL) return;
-        if (mirror.complete && mirror.naturalWidth === 0) scheduleRetry();
-      }, STALL_CHECK_MS);
+    function applySessionPrepare(data) {
+      if (!data || !data.sessionId || !data.signalingHost || !data.signalingPort) return false;
+
+      const sameSession =
+        sessionId === data.sessionId &&
+        signalingHost === data.signalingHost &&
+        signalingPort === data.signalingPort;
+
+      mirrorStopRequested = false;
+      sessionId = data.sessionId;
+      signalingHost = data.signalingHost;
+      signalingPort = data.signalingPort;
+      stopSessionPrepareRequests();
+
+      if (data.startMirroring === true) {
+        // Never tear down an in-flight WebRTC for duplicate startMirroring messages.
+        const state = peerConnection ? peerConnection.connectionState : '';
+        const failed = state === 'failed' || state === 'closed';
+        if (sameSession && !failed && (peerConnection || webRtcStartInProgress || webRtcStarted)) {
+          return true;
+        }
+        resetWebRtc({ keepSession: true, clearFrame: true });
+        sessionId = data.sessionId;
+        signalingHost = data.signalingHost;
+        signalingPort = data.signalingPort;
+        setStatus(COPY.connecting);
+        void startWebRtc();
+        return true;
+      }
+
+      // Credentials only — wait for the user to start the screen broadcast.
+      if (!sameSession) {
+        resetWebRtc({ keepSession: false, clearFrame: true });
+        sessionId = data.sessionId;
+        signalingHost = data.signalingHost;
+        signalingPort = data.signalingPort;
+      }
+      setStatus(COPY.readyBroadcast);
+      return true;
     }
 
-    function startStream(url) {
-      if (!url || typeof url !== 'string') return;
-      // Same stream already running: keep it, avoids flicker on duplicate sends.
-      if (url === streamURL && !stopRequested && gotFrame) return;
-
-      generation += 1;
-      clearTimers();
-      streamURL = url;
-      stopRequested = false;
-      retries = 0;
-      gotFrame = false;
-      mirror.removeAttribute('src');
-
-      setOverlay('');
-      liveBadge.classList.remove('show');
-      showCard();
-      setCard('Connecting', 'Hang on, your iPhone is getting ready.', COPY.connecting, { busy: true });
-
-      loadStream();
-      startStallWatch();
-    }
-
-    function stopStream(message) {
-      generation += 1;
-      stopRequested = true;
-      clearTimers();
-      streamURL = null;
-      gotFrame = false;
-      mirror.onload = mirror.onerror = null;
-      mirror.removeAttribute('src');
-      setOverlay('');
-      liveBadge.classList.remove('show');
-      showCard();
-      setCard('Ready on this TV', 'Your iPhone screen will appear here.', message || COPY.idle);
-    }
-
-    function fail() {
-      generation += 1;
-      clearTimers();
-      mirror.onload = mirror.onerror = null;
-      mirror.removeAttribute('src');
-      setOverlay('');
-      showCard();
-      setCard('Connection problem', 'The TV could not reach your iPhone.', COPY.failed, { error: true });
-      sendToPhone({ type: 'status', state: 'error' });
-    }
-
-    context.addCustomMessageListener(NAMESPACE, (event) => {
-      let data = event.data;
+    context.addCustomMessageListener(CUSTOM_CHANNEL, (event) => {
       try {
-        if (typeof data === 'string') data = JSON.parse(data);
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (data.type === 'session_prepare') {
+          applySessionPrepare(data);
+        } else if (data.type === 'mirror_stop' || data.type === 'stop') {
+          stopMirrorSurface();
+        }
       } catch (e) {
         console.error('Invalid cast message', e);
-        return;
-      }
-      if (!data) return;
-      switch (data.type) {
-        case 'stream': startStream(data.url); break;
-        case 'stop': stopStream(COPY.stopped); break;
-        case 'ping': sendToPhone({ type: 'status', state: gotFrame ? 'live' : 'idle' }); break;
       }
     });
 
-    // The ReplayKit broadcast keeps running while the app is backgrounded, so
-    // a sender disconnect must not blank a live mirror.
-    context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-      if (!stopRequested && gotFrame) {
-        setOverlay(COPY.phoneAway);
-        return;
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function signalingUrl(path) {
+      return `http://${signalingHost}:${signalingPort}${path}`;
+    }
+
+    async function postJson(path, body, query = '') {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      try {
+        return await fetch(signalingUrl(path + query), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
       }
-      if (context.getSenders().length === 0) stopStream(COPY.idle);
-    });
+    }
+
+    async function getJson(path) {
+      const controller = new AbortController();
+      // Short timeout: without a listener, a Chromecast TCP connect can hang 10-20s.
+      const timer = setTimeout(() => controller.abort(), 800);
+      try {
+        const res = await fetch(signalingUrl(path), { signal: controller.signal });
+        if (res.status === 204 || !res.ok) return null;
+        return await res.json();
+      } catch (e) {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function sendCastMessage(payload) {
+      context.sendCustomMessage(CUSTOM_CHANNEL, payload);
+    }
+
+    function startSessionPrepareRequests() {
+      stopSessionPrepareRequests();
+      sendCastMessage({ type: 'request_session_prepare' });
+      sessionRequestTimer = setInterval(() => {
+        if (!sessionId) sendCastMessage({ type: 'request_session_prepare' });
+      }, 1500);
+    }
+
+    function stopSessionPrepareRequests() {
+      if (sessionRequestTimer) {
+        clearInterval(sessionRequestTimer);
+        sessionRequestTimer = null;
+      }
+    }
+
+    async function waitForOffer() {
+      // Poll quickly so mirroring appears almost immediately after the broadcast starts.
+      for (let i = 0; i < 400; i++) {
+        if (mirrorStopRequested) throw new Error('Mirror stop requested');
+        const msg = await getJson(`/sdp/offer?sessionId=${encodeURIComponent(sessionId)}`);
+        if (msg && msg.type === 'offer' && msg.sdp) return msg.sdp;
+        await sleep(50);
+      }
+      throw new Error('Offer timeout');
+    }
+
+    function startIcePolling() {
+      if (icePollTimer) clearInterval(icePollTimer);
+      icePollTimer = setInterval(async () => {
+        try {
+          const list = await getJson(`/ice?sessionId=${encodeURIComponent(sessionId)}&side=sender`);
+          if (!list || !list.candidates) return;
+          for (const c of list.candidates) {
+            await peerConnection.addIceCandidate({
+              candidate: c.candidate,
+              sdpMid: c.sdpMid,
+              sdpMLineIndex: c.sdpMLineIndex,
+            });
+          }
+        } catch (e) {
+          console.warn('ICE poll error', e);
+        }
+      }, 100);
+    }
+
+    async function startWebRtc() {
+      if (!sessionId || !signalingHost || !signalingPort) return;
+      if (peerConnection || webRtcStartInProgress || webRtcStarted) return;
+      if (mirrorStopRequested) return;
+
+      const generation = webRtcGeneration;
+      webRtcStartInProgress = true;
+      setStatus(COPY.waitingBroadcast);
+
+      try {
+        const offerSdp = await waitForOffer();
+        if (mirrorStopRequested || generation !== webRtcGeneration) return;
+
+        peerConnection = new RTCPeerConnection(RTC_CONFIG);
+        peerConnection.ontrack = (event) => {
+          if (generation !== webRtcGeneration) return;
+          if (event.track) event.track.enabled = true;
+          // Unified Plan sometimes delivers tracks with an empty streams array.
+          const stream = (event.streams && event.streams[0])
+            ? event.streams[0]
+            : (event.track ? new MediaStream([event.track]) : null);
+          if (!stream) return;
+          const hasVideo = stream.getVideoTracks().length > 0 || event.track?.kind === 'video';
+          if (!hasVideo && remoteVideo.srcObject) return;
+          attachVideoStream(stream);
+        };
+
+        peerConnection.onconnectionstatechange = () => {
+          if (generation !== webRtcGeneration) return;
+          const state = peerConnection?.connectionState;
+          if (state === 'connected' && remoteVideo.videoWidth > 0) {
+            videoStatus.textContent = COPY.live;
+          } else if (state === 'connecting') {
+            videoStatus.textContent = COPY.connecting;
+          } else {
+            videoStatus.textContent = '';
+          }
+          if (state === 'connected') {
+            // ICE "connected" is not a picture yet — only claim Live when frames decode.
+            setStatus(remoteVideo.videoWidth > 0 ? COPY.connected : COPY.waitingVideo);
+          }
+          if (state === 'disconnected') {
+            // Transient — ICE often recovers on its own. Tearing down here would re-fetch the
+            // sender's one-shot offer and post an answer it never reads, blanking the TV.
+            if (!mirrorStopRequested && remoteVideo.videoWidth === 0) setStatus(COPY.reconnecting);
+            return;
+          }
+          if (state === 'failed' || state === 'closed') {
+            if (mirrorStopRequested || state === 'closed') {
+              resetWebRtc({ keepSession: true, clearFrame: true });
+              showWaiting();
+              setStatus(sessionId ? COPY.readyBroadcast : COPY.idle);
+              return;
+            }
+            resetWebRtc({ keepSession: true, clearFrame: true });
+            setTimeout(() => {
+              if (sessionId && !webRtcStarted && !webRtcStartInProgress && !mirrorStopRequested) {
+                void startWebRtc();
+              }
+            }, 800);
+          }
+        };
+
+        peerConnection.onicecandidate = (event) => {
+          if (!event.candidate || generation !== webRtcGeneration) return;
+          postJson('/ice', {
+            sessionId,
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid,
+            sdpMLineIndex: event.candidate.sdpMLineIndex,
+          }, '?side=receiver').catch(console.error);
+        };
+
+        await peerConnection.setRemoteDescription({ type: 'offer', sdp: offerSdp });
+        if (generation !== webRtcGeneration) return;
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        if (generation !== webRtcGeneration) return;
+
+        await postJson('/sdp', { sessionId, type: 'answer', sdp: answer.sdp });
+
+        startIcePolling();
+        webRtcStarted = true;
+      } catch (e) {
+        if (generation !== webRtcGeneration) return;
+        console.error('startWebRtc failed', e);
+        resetWebRtc({ keepSession: true, clearFrame: true });
+        if (!mirrorStopRequested) {
+          setStatus(COPY.waitingBroadcast);
+          setTimeout(() => {
+            if (sessionId && !webRtcStarted && !webRtcStartInProgress && !mirrorStopRequested) {
+              void startWebRtc();
+            }
+          }, 400);
+        }
+      } finally {
+        if (generation === webRtcGeneration) webRtcStartInProgress = false;
+      }
+    }
 
     context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => {
-      if (stopRequested) setCard('Ready on this TV', 'Your iPhone screen will appear here.', COPY.connecting, { busy: true });
+      setStatus(COPY.waitingPhone);
+      startSessionPrepareRequests();
     });
 
-    const options = new cast.framework.CastReceiverOptions();
-    options.maxInactivity = 3600;
-    options.disableIdleTimeout = true;
-    options.customNamespaces = { [NAMESPACE]: cast.framework.system.MessageType.JSON };
-    context.start(options);
+    if (context.getSenders().length > 0) {
+      startSessionPrepareRequests();
+    }
+
+    context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+      // The ReplayKit broadcast runs in its own process and WebRTC media does not need the
+      // Cast sender, so a backgrounded or force-quit app must not tear down a live mirror.
+      if (peerConnection || webRtcStarted || webRtcStartInProgress || remoteVideo.srcObject) {
+        setStatus(COPY.background);
+        return;
+      }
+      stopSessionPrepareRequests();
+      resetWebRtc({ keepSession: false });
+      sessionId = null;
+      signalingHost = null;
+      signalingPort = null;
+      setStatus(COPY.idle);
+    });
+
+    context.start({
+      disableIdleTimeout: true,
+      maxInactivity: 3600,
+      customNamespaces: { [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON },
+    });
   </script>
 </body>
 </html>
