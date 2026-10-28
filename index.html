@@ -301,6 +301,11 @@
         signalingPort = data.signalingPort;
       }
       setStatus(COPY.readyBroadcast);
+      // The phone app is suspended while the broadcast picker is open, so it cannot tell us
+      // when the offer is ready. Poll for it ourselves instead of waiting for startMirroring.
+      if (!peerConnection && !webRtcStartInProgress && !webRtcStarted) {
+        void startWebRtc();
+      }
       return true;
     }
 
@@ -517,9 +522,10 @@
       // The ReplayKit broadcast runs in its own process and WebRTC media does not need the
       // Cast sender, so a backgrounded or force-quit app must not tear down a live mirror.
       if (peerConnection || webRtcStarted || webRtcStartInProgress || remoteVideo.srcObject) {
-        setStatus(COPY.background);
+        if (remoteVideo.srcObject) setStatus(COPY.background);
         return;
       }
+      if (sessionId && !mirrorStopRequested) return;
       stopSessionPrepareRequests();
       resetWebRtc({ keepSession: false });
       sessionId = null;
