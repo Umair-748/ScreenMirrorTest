@@ -139,6 +139,8 @@
     let blackScreenWatchdog = null;
     let mirrorStopRequested = false;
     let webRtcGeneration = 0;
+    let hadLiveStream = false;
+    let endSessionTimer = null;
 
     const context = cast.framework.CastReceiverContext.getInstance();
     const remoteVideo = document.getElementById('remote-video');
@@ -166,7 +168,28 @@
       videoStatus.textContent = '';
     }
 
+    function cancelEndSession() {
+      if (endSessionTimer) {
+        clearTimeout(endSessionTimer);
+        endSessionTimer = null;
+      }
+    }
+
+    // The phone ended the broadcast: leave the TV instead of sitting on the receiver screen.
+    function endCastSession() {
+      cancelEndSession();
+      hadLiveStream = false;
+      stopSessionPrepareRequests();
+      resetWebRtc({ keepSession: false, clearFrame: true });
+      sessionId = null;
+      signalingHost = null;
+      signalingPort = null;
+      try { context.stop(); } catch (e) {}
+    }
+
     function stopMirrorSurface() {
+      cancelEndSession();
+      hadLiveStream = false;
       mirrorStopRequested = true;
       resetWebRtc({ keepSession: true, clearFrame: true });
       showWaiting();
@@ -213,6 +236,8 @@
       try { remoteVideo.autoplay = true; } catch (_) {}
 
       const markLive = () => {
+        hadLiveStream = true;
+        cancelEndSession();
         setStatus(COPY.connected);
         videoStatus.textContent = COPY.live;
         remoteVideo.muted = false;
@@ -446,6 +471,7 @@
           } else {
             videoStatus.textContent = '';
           }
+          if (state === 'connected') cancelEndSession();
           if (state === 'connected') {
             // ICE "connected" is not a picture yet — only claim Live when frames decode.
             setStatus(remoteVideo.videoWidth > 0 ? COPY.connected : COPY.waitingVideo);
@@ -454,9 +480,16 @@
             // Transient — ICE often recovers on its own. Tearing down here would re-fetch the
             // sender's one-shot offer and post an answer it never reads, blanking the TV.
             if (!mirrorStopRequested && remoteVideo.videoWidth === 0) setStatus(COPY.reconnecting);
+            if (hadLiveStream && !mirrorStopRequested && !endSessionTimer) {
+              endSessionTimer = setTimeout(endCastSession, 6000);
+            }
             return;
           }
           if (state === 'failed' || state === 'closed') {
+            if (hadLiveStream && !mirrorStopRequested) {
+              endCastSession();
+              return;
+            }
             if (mirrorStopRequested || state === 'closed') {
               resetWebRtc({ keepSession: true, clearFrame: true });
               showWaiting();
